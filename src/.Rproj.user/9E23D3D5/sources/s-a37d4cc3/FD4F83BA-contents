@@ -1,0 +1,38 @@
+# Predict the temperature of Szeged, Hungary based on the humidity, wind 
+# speed, etc
+
+# Required packages
+# + PerformanceAnalytics
+# + plyr
+
+# Read the weather data
+data = read.csv('WeatherHistory.csv', sep=',')
+
+# Take out rows with null class label in column Precip.Type
+# Required packages:
+#   + plyr
+#   + PerformanceAnalytics
+processed_data = data[data$Precip.Type != 'null', ]
+
+# Map categorical variable in Precip.Type to numerical value
+# 0 = rain
+# 1 = snow
+require(plyr)
+processed_data$Precip.Type <- mapvalues(processed_data$Precip.Type, 
+                                        from=c("rain","snow"), 
+                                        to=c(0, 1))
+
+# Convert variables to numeric variables
+columns = names(processed_data)
+for (column in columns) {
+  processed_data[[column]] = as.numeric(as.character(processed_data[[column]]))
+} 
+
+# Examining correlations among variables (only 
+# use first 500 data entries)
+require(PerformanceAnalytics)
+chart.Correlation(processed_data[1:500,], 
+                  method="spearman",
+                  histogram=TRUE,
+                  pch=16)
+

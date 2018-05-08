@@ -1,0 +1,190 @@
+# Predict the temperature of Szeged, Hungary based on the humidity, wind 
+# speed, etc
+
+# y = Temperature..C.
+# x1 = Precip.Type            
+# x2 = Humidity
+# x3 = Wind.Speed
+# x4 = Wind.Bearing.deg
+# x7 = Visibility
+# x8 = Loud.Cover
+# x9 = Pressure
+
+# Required packages
+# + PerformanceAnalytics
+# + plyr
+# + rpart
+# + rpart.plot
+# + arules
+# + caret
+# + e1071
+# + DMwR
+
+# Read the weather data
+data = read.csv('WeatherHistorySampled.csv', sep=',')
+
+#################################################################
+# DATA PREPROCESS
+#################################################################
+
+# Take out rows with null class label in column Precip.Type
+# Required packages:
+#   + plyr
+#   + PerformanceAnalytics
+processed_data = data[data$Precip.Type != 'null', ]
+
+# Map categorical variable in Precip.Type to numerical value
+# 0 = rain
+# 1 = snow
+require(plyr)
+processed_data$Precip.Type <- mapvalues(processed_data$Precip.Type, 
+                                        from=c("rain","snow"), 
+                                        to=c(0, 1))
+
+# Convert variables to numeric variables
+columns = names(processed_data)
+for (column in columns) {
+  processed_data[[column]] = as.numeric(as.character(processed_data[[column]]))
+}
+data = processed_data
+
+#################################################################
+# PLOTTING
+#################################################################
+
+# Do a correlation plot & examine correlations among variables (only 
+# use first 500 data entries)
+require(PerformanceAnalytics)
+chart.Correlation(data, 
+                  method="spearman",
+                  histogram=TRUE,
+                  pch=16)
+
+# Scatter plot of humidity vs temperature
+plot(data$Temp~data$Humidity,
+     main="Scatter Plot of Humidity vs Temperature",
+     xlab="Humidity",
+     ylab="Temperature")
+
+#################################################################
+# REGRESSION MODEL FITTING
+#################################################################
+
+# Fit a linear model to find the temperature
+# Model 1: linear model ignoring variable Precip Type
+# Model 1: y = b_0 + sum(b_i*x_i) (for i = 2 -> 9)
+model1 = lm(data$Temp ~  
+              data$Humidity + 
+              data$Wind.Speed +
+              data$Wind.Bearing.deg + 
+              data$Visibility + 
+              data$Loud.Cover + 
+              data$Pressure)
+
+# Display summary of model 1
+print(summary(model1))
+
+# Fit a linear model to find the temperature
+# Model 2: y = b_0 + b_2*x_2
+model2 = lm(data$Temp ~  
+              data$Humidity)
+
+# Display summary of model 2
+print(summary(model2))
+
+#################################################################
+# CLASSIFICATION MODELS FITTING
+#################################################################
+require(rpart)
+require(rpart.plot)
+require(arules)
+require(caret)
+require(e1071)
+
+# Discretize the temperature column & turn into a classification problem
+# Discretize temperature column by breaking into 5 groups based on clustering algorithm
+data.discretized = data
+data.discretized$Temp = discretize(data.discretized$Temp, 
+                                   method = "cluster",
+                                   breaks = 5)
+data.discretized.targets = unique(as.vector(data.discretized$Temp))
+
+# Classification Decision Tree Model 1
+# The decision tree model uses 3 attributes: Humidity, Wind.Speed, and Pressure to predict the
+# target variable Temp
+
+# Perform a Random Sub-sampling to measure performance of the model
+# with 100 iterations
+# Use 80% of the input data for training & 20% of data for testing
+total_accuracy = c()
+for (i in 1:100) {
+  training_data = data.discretized[sample(nrow(data.discretized), floor((dim(data.discretized)[1]+1)*0.8)),]
+  test_data = data.discretized[sample(nrow(data.discretized), floor((dim(data.discretized)[1]+1)*0.2)),]
+  
+  # Fit a tree model
+  tree_model1 <- rpart(Temp ~ 
+                         Humidity +
+                         Wind.Speed +
+                         Pressure,
+                       data=training_data,
+                       method="class")
+  
+  # Test the trained model on the training data
+  pred_t1 = predict(tree_model1,
+                    test_data[c("Humidity", "Wind.Speed", "Pressure")], 
+                    type="class")
+  
+  # Prepare a confusion matrix to compute the error rate of the model on training
+  # data
+  conf_matrix = confusionMatrix(pred_t1, test_data$Temp)
+  total_accuracy = append(total_accuracy, conf_matrix$overall[1])
+}
+
+# Compute average accuracy of the tree model
+print(mean(total_accuracy))
+
+# Fit a tree model
+tree_model1 <- rpart(Temp ~ 
+                       Humidity +
+                       Wind.Speed +
+                       Pressure,
+                     data=training_data,
+                     method="class")
+
+# plot tree model
+rpart.plot(tree_model1,
+           main="Regression Tree for Temperature in Szeged, Hungary")
+
+# Classification KNN Model 1
+require(DMwR)
+
+# Discretize the temperature column & turn into a classification problem
+# Discretize temperature column by breaking into 5 groups based on clustering algorithm
+data.discretized2 = data
+data.discretized2$Temp = discretize(data.discretized2$Temp, 
+                                    method = "interval",
+                                    breaks = 12)
+data.discretized2.targets = unique(as.vector(data.discretized2$Temp))
+
+# Perform a Random Sub-sampling to measure performance of the model
+# with 100 iterations
+# Use 80% of the input data for training & 20% of data for testing
+total_accuracy = c()
+for (i in 1:100) {
+  training_data = data.discretized2[sample(nrow(data.discretized2), floor((dim(data.discretized2)[1]+1)*0.8)),]
+  test_data = data.discretized2[sample(nrow(data.discretized2), floor((dim(data.discretized2)[1]+1)*0.2)),]
+  
+  # Fit a KNN model with k=1
+  knn_model1 <- kNN(Temp~.,
+                    train = training_data[c("Temp", "Humidity", "Pressure")], 
+                    test = test_data[c("Temp", "Humidity", "Pressure")],
+                    k=1)
+  
+  # Prepare a confusion matrix to compute the error rate of the model on training
+  # data
+  conf_matrix = confusionMatrix(test_data$Temp, knn_model1)
+  total_accuracy = append(total_accuracy, conf_matrix$overall[1])
+}
+
+# Compute average accuracy of the tree model
+print(mean(total_accuracy))

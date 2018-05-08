@@ -1,0 +1,208 @@
+# Predict the temperature of Szeged, Hungary based on the humidity, wind 
+# speed, etc
+
+# Required packages
+# + PerformanceAnalytics
+# + plyr
+# + plot3D
+# + rpart
+# + rpart.plot
+# + arules
+# + caret
+# + e1071
+# + DMwR
+
+require(plyr)
+
+# Variables contain the dataframe
+# data - processed dataframe used for regression problem
+# data.discretized - discretized dataframe based on k-cluster used for classification problem (5 groups)
+# data.discretized2 - discretized dataframe based on interval used for classification problem (15 groups)
+
+# Read the weather data
+data = read.csv('WeatherHistory.csv', sep=',')
+
+# Frequency plot of weather summary
+par(las=2)
+barplot(count(data, 'Summary')$freq, names.arg = count(data, 'Summary')$Summary, horiz=TRUE, cex.names=0.5)
+
+#################################################################
+# DATA PREPROCESS
+#################################################################
+
+# Extract day
+data$Day = as.numeric(sapply(data$Formatted.Date, substring, 9, 10))
+
+# Extract month
+data$Month = as.numeric(sapply(data$Formatted.Date, substring, 6, 7))
+
+# Extract year (used for plotting heatmap)
+data$Year = as.numeric(sapply(data$Formatted.Date, substring, 1, 4))
+
+# Extract hour
+data$Hour = as.numeric(sapply(data$Formatted.Date, substring, 12, 13))
+
+# Drop unused columns
+data = data[, !(colnames(data) %in% c("Formatted.Date", "Loud.Cover", "Daily.Summary"))]
+
+# Take out rows with null class label in column Precip.Type
+# Required packages:
+#   + plyr
+#   + PerformanceAnalytics
+data = data[data$Precip.Type != 'null', ]
+
+# Map categorical variable in Precip.Type to numerical value
+# 0 = rain
+# 1 = snow
+require(plyr)
+data$Precip.Type <- mapvalues(data$Precip.Type, 
+                                        from=c("rain","snow"), 
+                                        to=c(0, 1))
+
+# Map categorical variable in Summary to numerical value
+require(plyr)
+data$Summary <- mapvalues(data$Summary, 
+                                        from=as.vector(unique(data$Summary)), 
+                                        to=seq(0, length(as.vector(unique(data$Summary)))-1, 1))
+
+
+# Convert variables to numeric variables
+columns = names(data)
+for (column in columns) {
+  data[[column]] = as.numeric(as.character(data[[column]]))
+}
+data = data
+
+# Standardize all columns except response column & columns with categorical
+# values
+excluding_columns = c("Precip.Type", "Day", "Month", "Year", "Hour", "Summary", "Temp")
+tmp = as.data.frame(scale(data[, !names(data) %in% excluding_columns]))
+tmp[excluding_columns] = data[excluding_columns]
+data = tmp
+rm(tmp)
+rm(excluding_columns)
+
+#################################################################
+# PLOTTING
+#################################################################
+
+data.plot = data[sample(nrow(data), 200), ]
+
+# Do a correlation plot & examine correlations among variables (only 
+# use first 500 data entries)
+require(PerformanceAnalytics)
+chart.Correlation(data.plot, 
+                  method="spearman",
+                  histogram=TRUE,
+                  pch=16)
+
+# Scatter plot of humidity vs temperature
+plot(data.plot$Temp~data.plot$Humidity,
+     main="Scatter Plot of Humidity vs Temperature",
+     xlab="Humidity",
+     ylab="Temperature")
+
+# Scatter plot of month vs temperature
+plot(data.plot$Temp~data.plot$Month,
+     main="Scatter Plot of Month vs Temperature",
+     xlab="Month",
+     ylab="Temperature")
+
+year = 2013
+for (month in 1:12) {
+  tmp = data[data$Year == year & data$Month == month, ][, c("Day", "Temp")]
+  tmp = tmp[order(tmp$Day),]
+  
+  print(nrow(tmp))
+  if(nrow(tmp) != 31*24) {
+    next
+  }
+  
+  tmp = matrix(as.matrix(tmp$Temp), nrow = 31, ncol=24, byrow = TRUE)
+  
+  breaks = seq(-15, 35, by=0.01)
+  Sys.sleep(0) 
+  levelplot(t(tmp), xlab="Time", ylab="Day", main="Temperature in January",  
+            col.regions = colorRampPalette(c("pink", "blue", "cyan", "lightgreen", "yellow", "orange", "red"))(length(breaks)-1),
+            at = breaks)
+  Sys.sleep(0) 
+}
+rm(year)
+
+# 3D Plot of Temperature vs Humidity, and Summary
+require(plot3D)
+scatter3D(x=data.plot$Humidity, y=data.plot$Summary, z=data.plot$Temp, 
+          clab = c("Temperature"),
+          xlab="Humidity",
+          ylab="Summary",
+          zlab="Temperature", col.panel ="white", pch = 18, bty = "u",
+          col.grid = "black")
+
+scatter3D(x=data.plot$Humidity, y=data.plot$Pressure, z=data.plot$Temp, 
+          clab = c("Temperature"),
+          xlab="Humidity",
+          ylab="Pressure",
+          zlab="Temperature", col.panel ="white", pch = 18, bty = "u",
+          col.grid = "black")
+
+scatter3D(x=data.plot$Humidity, y=data.plot$Visibility, z=data.plot$Temp, 
+          clab = c("Temperature"),
+          xlab="Humidity",
+          ylab="Visibility",
+          zlab="Temperature", col.panel ="white", pch = 18, bty = "u",
+          col.grid = "black")
+
+#################################################################
+# CLASSIFICATION MODELS FITTING
+#
+# Instead of keeping this as a regression problem, we discretize
+# the response variable & turn it into a classification problem.
+# We match the temperatures into group of temperature range and
+# apply 2 different classification algorithms to fit and model
+# and compute the accuracy of each model
+#################################################################
+require(rpart)
+require(rpart.plot)
+require(arules)
+require(caret)
+require(e1071)
+require(DMwR)
+
+# Classification KNN Model 1
+# Discretize the temperature column & turn into a classification problem
+# Discretize temperature column by breaking into 8 groups with same interval
+data.discretized2 = data
+data.discretized2$Temp = discretize(data.discretized2$Temp,
+                                    method = "interval",
+                                    breaks = 8)
+data.discretized2.targets = unique(as.vector(data.discretized2$Temp))
+
+for (l in 1:10) {
+# Perform a Random Sub-sampling to measure performance of the model
+# with 100 iterations
+# Use 80% of the input data for training & 20% of data for testing
+total_accuracy = c()
+for (i in 1:1) {
+  
+  # Sample 40% of the rows in dataframe for training and the rest for testing
+  # the model
+  t = sample(nrow(data.discretized2), floor(dim(data.discretized2)[1]*0.6))
+  training_data = data.discretized2[t, ]
+  test_data = data.discretized2[-t, ]
+  
+  # Fit a KNN model with k=5
+  attributes = c("Temp", "Humidity", "Precip.Type", "Visibility", "Pressure", "Day", "Month")
+  knn_model1 <- kNN(Temp~.,
+                    train = training_data[attributes], 
+                    test = test_data[attributes],
+                    k=5)
+  
+  # Prepare a confusion matrix to compute the error rate of the model on training
+  # data
+  conf_matrix = confusionMatrix(reference=test_data$Temp, data=knn_model1)
+  total_accuracy = append(total_accuracy, conf_matrix$overall[1])
+}
+
+# Compute average accuracy of the KNN model
+print(mean(total_accuracy))
+}
